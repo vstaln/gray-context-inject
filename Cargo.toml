@@ -1,0 +1,13 @@
+[package]
+name = "gray-context-inject"
+version = "0.1.0"
+edition = "2024"
+description = "Merged context-injection plugin for the gray agent harness: header, context-pin, resources, rules, include, dirty-guard, gh-issues in one sidecar."
+license = "MIT"
+
+[[bin]]
+name = "context-inject"
+path = "src/main.rs"
+
+[dependencies]
+serde_json = "1"
