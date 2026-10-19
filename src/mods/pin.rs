@@ -36,7 +36,7 @@ fn manifest_pin() -> Value {
 fn state_dir() -> PathBuf {
     std::env::var_os("GRAY_HOME")
         .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".gray")))
+        .or_else(|| std::env::home_dir().map(|h| h.join(".gray")))
         .unwrap_or_else(|| PathBuf::from("."))
         .join("context-pin")
 }
@@ -119,12 +119,16 @@ fn save(path: &Path, pins: &[Pin]) -> std::io::Result<()> {
 /// Resolve `arg` as a path: absolute, `~/…`, or relative to `cwd`.
 fn resolve_path(arg: &str, cwd: &str) -> PathBuf {
     if let Some(rest) = arg.strip_prefix("~/")
-        && let Some(home) = std::env::var_os("HOME")
+        && let Some(home) = std::env::home_dir()
     {
-        return PathBuf::from(home).join(rest);
+        return home.join(rest);
     }
     let p = PathBuf::from(arg);
-    if p.is_absolute() { p } else { Path::new(cwd).join(p) }
+    if p.is_absolute() {
+        p
+    } else {
+        Path::new(cwd).join(p)
+    }
 }
 
 /// `/pin <path-or-note>`: existing file → file pin, anything else → note.
@@ -245,7 +249,11 @@ fn run_command(name: &str, argv: &[&str], params: &Value) -> String {
         "/pin" => pin(arg.trim(), params),
         "/unpin" => unpin(arg.trim(), params),
         "/pins" => {
-            if arg.is_empty() { list(params) } else { "usage: /pins".into() }
+            if arg.is_empty() {
+                list(params)
+            } else {
+                "usage: /pins".into()
+            }
         }
         _ => "usage: /pin <path-or-note> · /unpin <n|all> · /pins".into(),
     }
@@ -316,7 +324,13 @@ fn key_file(key: &str) -> String {
     key.hash(&mut h);
     let clean: String = key
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '.' || c == '-' { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '.' || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
         .take(48)
         .collect();
     format!("{}-{:016x}", clean.trim_matches('.'), h.finish())
@@ -373,7 +387,12 @@ mod tests {
     fn note_pin_roundtrip_and_inject() {
         with_home(|_| {
             let r = cmd("/pin", &["remember the deploy key rotates"], sess());
-            assert!(r["result"]["text"].as_str().unwrap().contains("pinned note"));
+            assert!(
+                r["result"]["text"]
+                    .as_str()
+                    .unwrap()
+                    .contains("pinned note")
+            );
 
             let r = call("prompt/context", json!({"session": sess()}));
             let text = r["result"]["text"].as_str().unwrap();
@@ -384,7 +403,12 @@ mod tests {
             assert!(r["result"]["text"].as_str().unwrap().contains("#1 note"));
 
             let r = cmd("/unpin", &["1"], sess());
-            assert!(r["result"]["text"].as_str().unwrap().contains("unpinned #1"));
+            assert!(
+                r["result"]["text"]
+                    .as_str()
+                    .unwrap()
+                    .contains("unpinned #1")
+            );
             let r = call("prompt/context", json!({"session": sess()}));
             assert_eq!(r["result"], json!({}));
         });
@@ -399,7 +423,12 @@ mod tests {
             let s = json!({"id": "s9", "cwd": proj.to_string_lossy()});
 
             let r = cmd("/pin", &["spec.md"], s.clone());
-            assert!(r["result"]["text"].as_str().unwrap().contains("pinned file"));
+            assert!(
+                r["result"]["text"]
+                    .as_str()
+                    .unwrap()
+                    .contains("pinned file")
+            );
 
             std::fs::write(proj.join("spec.md"), "v2 changed").unwrap();
             let r = call("prompt/context", json!({"session": s}));
@@ -413,7 +442,10 @@ mod tests {
         with_home(|_| {
             cmd("/pin", &["for-a"], json!({"id": "a", "cwd": "/x"}));
             cmd("/pin", &["for-b"], json!({"id": "b", "cwd": "/x"}));
-            let a = call("prompt/context", json!({"session": {"id": "a", "cwd": "/x"}}));
+            let a = call(
+                "prompt/context",
+                json!({"session": {"id": "a", "cwd": "/x"}}),
+            );
             let text = a["result"]["text"].as_str().unwrap();
             assert!(text.contains("for-a") && !text.contains("for-b"));
         });
@@ -428,10 +460,12 @@ mod tests {
             assert!(r["result"]["text"].as_str().unwrap().contains("no pin #9"));
             let r = cmd("/unpin", &["all"], sess());
             assert!(r["result"]["text"].as_str().unwrap().contains("unpinned 2"));
-            assert!(cmd("/pins", &[], sess())["result"]["text"]
-                .as_str()
-                .unwrap()
-                .contains("no pins"));
+            assert!(
+                cmd("/pins", &[], sess())["result"]["text"]
+                    .as_str()
+                    .unwrap()
+                    .contains("no pins")
+            );
         });
     }
 

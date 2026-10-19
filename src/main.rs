@@ -17,18 +17,25 @@ use std::io::{BufRead, Write};
 
 use serde_json::{Value, json};
 
+#[allow(dead_code)]
 #[path = "mods/dirty.rs"]
 mod dirty;
+#[allow(dead_code)]
 #[path = "mods/ghissues.rs"]
 mod ghissues;
+#[allow(dead_code)]
 #[path = "mods/header.rs"]
 mod header;
+#[allow(dead_code)]
 #[path = "mods/include.rs"]
 mod include;
+#[allow(dead_code)]
 #[path = "mods/pin.rs"]
 mod pin;
+#[allow(dead_code)]
 #[path = "mods/resources.rs"]
 mod resources;
+#[allow(dead_code)]
 #[path = "mods/rules.rs"]
 mod rules;
 

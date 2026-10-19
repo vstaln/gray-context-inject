@@ -29,7 +29,7 @@ fn manifest_dirty() -> Value {
 fn state_dir() -> PathBuf {
     let home = std::env::var_os("GRAY_HOME")
         .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".gray")))
+        .or_else(|| std::env::home_dir().map(|h| h.join(".gray")))
         .unwrap_or_else(|| PathBuf::from("."));
     home.join("dirty-guard")
 }
@@ -173,7 +173,9 @@ fn main_dirty() -> std::io::Result<()> {
     let mut stdout = std::io::stdout();
     for line in stdin.lock().lines() {
         let line = line?;
-        let Ok(req) = serde_json::from_str::<Value>(&line) else { continue };
+        let Ok(req) = serde_json::from_str::<Value>(&line) else {
+            continue;
+        };
         let (reply, exit) = handle_dirty(&req);
         if let Some(reply) = reply {
             writeln!(stdout, "{reply}")?;
@@ -229,7 +231,18 @@ mod tests {
         std::fs::write(repo.join("untracked.txt"), "x").unwrap();
         std::fs::write(repo.join("tracked.txt"), "x").unwrap();
         git(&repo, &["add", "tracked.txt"]);
-        git(&repo, &["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "i"]);
+        git(
+            &repo,
+            &[
+                "-c",
+                "user.email=t@t",
+                "-c",
+                "user.name=t",
+                "commit",
+                "-qm",
+                "i",
+            ],
+        );
         std::fs::write(repo.join("tracked.txt"), "y").unwrap();
         let note = dirty_note(&repo).unwrap();
         assert_eq!(
@@ -252,7 +265,10 @@ mod tests {
     #[test]
     fn prompt_context_returns_text_or_empty() {
         // Whatever the real cwd is, the reply must be {} or {text: String}.
-        let r = call("prompt/context", json!({"session": {"id": "s", "cwd": "/nonexistent"}}));
+        let r = call(
+            "prompt/context",
+            json!({"session": {"id": "s", "cwd": "/nonexistent"}}),
+        );
         let result = &r["result"];
         assert!(result.get("text").is_none() || result["text"].is_string());
     }
@@ -270,7 +286,8 @@ mod tests {
 
     #[test]
     fn notifications_are_silent_and_shutdown_exits() {
-        let (reply, exit) = handle_dirty(&json!({"method":"event/notify","params":{"type":"turn_end"}}));
+        let (reply, exit) =
+            handle_dirty(&json!({"method":"event/notify","params":{"type":"turn_end"}}));
         assert!(reply.is_none() && !exit);
         let (reply, exit) = handle_dirty(&json!({ "id": 2, "method": "plugin/shutdown" }));
         assert!(reply.is_some() && exit);

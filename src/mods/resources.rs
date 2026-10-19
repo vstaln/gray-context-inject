@@ -34,7 +34,7 @@ fn manifest_resources() -> Value {
 fn state_dir() -> PathBuf {
     std::env::var_os("GRAY_HOME")
         .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".gray")))
+        .or_else(|| std::env::home_dir().map(|h| h.join(".gray")))
         .unwrap_or_else(|| PathBuf::from(".gray"))
         .join("resources")
 }
@@ -67,8 +67,8 @@ fn save_list(files: &[String]) -> std::io::Result<()> {
 /// Expand a leading `~` / `~/…` against `$HOME`.
 fn expand_tilde(p: &str) -> String {
     if p == "~" || p.starts_with("~/") {
-        if let Some(home) = std::env::var_os("HOME") {
-            return format!("{}{}", Path::new(&home).display(), &p[1..]);
+        if let Some(home) = std::env::home_dir() {
+            return format!("{}{}", home.display(), &p[1..]);
         }
     }
     p.to_string()
@@ -250,7 +250,9 @@ fn main_resources() -> std::io::Result<()> {
     let mut stdout = std::io::stdout();
     for line in stdin.lock().lines() {
         let line = line?;
-        let Ok(req) = serde_json::from_str::<Value>(&line) else { continue };
+        let Ok(req) = serde_json::from_str::<Value>(&line) else {
+            continue;
+        };
         let (reply, exit) = handle_resources(&req);
         if let Some(reply) = reply {
             writeln!(stdout, "{reply}")?;
@@ -268,7 +270,9 @@ mod tests {
     use super::*;
 
     fn call(method: &str, params: Value) -> Value {
-        handle_resources(&json!({ "id": 1, "method": method, "params": params })).0.unwrap()
+        handle_resources(&json!({ "id": 1, "method": method, "params": params }))
+            .0
+            .unwrap()
     }
 
     /// A fresh temp dir that removes itself on drop.
@@ -384,7 +388,10 @@ mod tests {
                 "command/run",
                 json!({ "name": "/resources", "argv": ["add", arg],
                         "session": { "cwd": dir.0 } }),
-            )["result"]["text"].as_str().unwrap().to_string()
+            )["result"]["text"]
+                .as_str()
+                .unwrap()
+                .to_string()
         };
         assert!(add("f.md").contains("1 total"));
         assert!(add("./f.md").contains("already pinned"));
