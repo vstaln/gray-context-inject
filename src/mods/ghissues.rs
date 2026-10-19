@@ -37,7 +37,7 @@ fn manifest_ghissues() -> Value {
 fn state_dir() -> PathBuf {
     let home = std::env::var_os("GRAY_HOME")
         .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".gray")))
+        .or_else(|| std::env::home_dir().map(|h| h.join(".gray")))
         .unwrap_or_else(|| PathBuf::from("."));
     home.join("gh-issues")
 }
@@ -76,15 +76,67 @@ fn find_refs(text: &str) -> Vec<u64> {
     out
 }
 
+/// `prog args` (optionally in `cwd`), bounded by a wall-clock deadline —
+/// the `timeout(1)` wrapper ported to spawn+try_wait so it also works on
+/// Windows/macOS, where GNU `timeout` doesn't exist. None on spawn
+/// failure or timeout (the child is killed).
+fn run_with_timeout(
+    prog: &str,
+    args: &[&str],
+    cwd: Option<&str>,
+    secs: u64,
+) -> Option<std::process::Output> {
+    use std::io::Read;
+    use std::process::{Command, Stdio};
+    let mut cmd = Command::new(prog);
+    cmd.args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    if let Some(dir) = cwd {
+        cmd.current_dir(dir);
+    }
+    let mut child = cmd.spawn().ok()?;
+    // Drain both pipes on threads so a chatty child can't deadlock.
+    let drain = |mut r: Box<dyn Read + Send>| {
+        std::thread::spawn(move || {
+            let mut b = Vec::new();
+            let _ = r.read_to_end(&mut b);
+            b
+        })
+    };
+    let out_t = child.stdout.take().map(|s| drain(Box::new(s)));
+    let err_t = child.stderr.take().map(|s| drain(Box::new(s)));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(secs);
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(s)) => break s,
+            Ok(None) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(std::time::Duration::from_millis(15));
+            }
+            Ok(None) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+            Err(_) => return None,
+        }
+    };
+    let stdout = out_t.and_then(|t| t.join().ok()).unwrap_or_default();
+    let stderr = err_t.and_then(|t| t.join().ok()).unwrap_or_default();
+    Some(std::process::Output {
+        status,
+        stdout,
+        stderr,
+    })
+}
+
 /// `true` when `cwd` is a git checkout whose remotes include github.com.
 fn real_github_repo(cwd: &str) -> bool {
     if !Path::new(cwd).is_dir() {
         return false;
     }
-    let Ok(out) = std::process::Command::new("timeout")
-        .args(["5", "git", "-C", cwd, "remote", "-v"])
-        .output()
-    else {
+    let Some(out) = run_with_timeout("git", &["-C", cwd, "remote", "-v"], None, 5) else {
         return false;
     };
     out.status.success() && String::from_utf8_lossy(&out.stdout).contains("github.com")
@@ -92,10 +144,9 @@ fn real_github_repo(cwd: &str) -> bool {
 
 /// `gh issue view <n>` → `"Title (STATE)"`, 5s timeout, run in `cwd`.
 fn real_fetch_issue(cwd: &str, n: u64) -> Option<String> {
-    let out = std::process::Command::new("timeout")
-        .args([
-            "5",
-            "gh",
+    let out = run_with_timeout(
+        "gh",
+        &[
             "issue",
             "view",
             &n.to_string(),
@@ -103,10 +154,10 @@ fn real_fetch_issue(cwd: &str, n: u64) -> Option<String> {
             "title,state",
             "-q",
             ".title + \" (\" + .state + \")\"",
-        ])
-        .current_dir(cwd)
-        .output()
-        .ok()?;
+        ],
+        Some(cwd),
+        5,
+    )?;
     if !out.status.success() {
         return None;
     }
@@ -133,7 +184,10 @@ impl GhIssues {
     }
 
     fn in_github_repo(&mut self, cwd: &str) -> bool {
-        *self.repo.entry(cwd.to_string()).or_insert_with(|| (self.is_repo)(cwd))
+        *self
+            .repo
+            .entry(cwd.to_string())
+            .or_insert_with(|| (self.is_repo)(cwd))
     }
 
     fn issue(&mut self, cwd: &str, n: u64) -> Option<String> {
@@ -185,7 +239,11 @@ fn run_command(argv: &[&str]) -> String {
                 std::fs::create_dir_all(&dir).and_then(|_| std::fs::write(&flag, b""))
             } else {
                 std::fs::remove_file(&flag).or_else(|e| {
-                    if e.kind() == std::io::ErrorKind::NotFound { Ok(()) } else { Err(e) }
+                    if e.kind() == std::io::ErrorKind::NotFound {
+                        Ok(())
+                    } else {
+                        Err(e)
+                    }
                 })
             };
             match res {
@@ -241,7 +299,9 @@ fn main_ghissues() -> std::io::Result<()> {
     let mut stdout = std::io::stdout();
     for line in stdin.lock().lines() {
         let line = line?;
-        let Ok(req) = serde_json::from_str::<Value>(&line) else { continue };
+        let Ok(req) = serde_json::from_str::<Value>(&line) else {
+            continue;
+        };
         let (reply, exit) = handle_ghissues(&mut plugin, &req);
         if let Some(reply) = reply {
             writeln!(stdout, "{reply}")?;
@@ -346,10 +406,16 @@ mod tests {
     #[test]
     fn issue_lookups_are_cached() {
         let mut p = stubbed();
-        p.issues.insert(("/repo".into(), 1), Some("cached title (OPEN)".into()));
+        p.issues
+            .insert(("/repo".into(), 1), Some("cached title (OPEN)".into()));
         p.fetch = |_, _| panic!("must not be called");
         let r = submit(&mut p, "fix #1", "/repo");
-        assert!(r["result"]["text"].as_str().unwrap().contains("cached title"));
+        assert!(
+            r["result"]["text"]
+                .as_str()
+                .unwrap()
+                .contains("cached title")
+        );
     }
 
     #[test]
@@ -365,7 +431,8 @@ mod tests {
     #[test]
     fn shutdown_replies_then_exits() {
         let mut p = stubbed();
-        let (reply, exit) = handle_ghissues(&mut p, &json!({ "id": 2, "method": "plugin/shutdown" }));
+        let (reply, exit) =
+            handle_ghissues(&mut p, &json!({ "id": 2, "method": "plugin/shutdown" }));
         assert!(reply.is_some() && exit);
     }
 }

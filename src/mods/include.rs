@@ -89,7 +89,7 @@ fn extract_tokens(content: &str) -> Vec<String> {
 // ── resolution ────────────────────────────────────────────────
 
 fn home_dir() -> Option<PathBuf> {
-    std::env::var_os("HOME").map(PathBuf::from)
+    std::env::home_dir()
 }
 
 fn resolve(base: &Path, token: &str) -> PathBuf {
@@ -131,7 +131,10 @@ impl Scan {
         let resolved = resolve(base, token);
         let disp = display(&self.cwd, &resolved);
         if depth > MAX_DEPTH {
-            self.blocks.push(Block::Note { disp, note: "depth cap reached".into() });
+            self.blocks.push(Block::Note {
+                disp,
+                note: "depth cap reached".into(),
+            });
             return;
         }
         let key = resolved.canonicalize().unwrap_or_else(|_| resolved.clone());
@@ -144,18 +147,27 @@ impl Scan {
         let bytes = match std::fs::read(&resolved) {
             Ok(b) => b,
             Err(_) => {
-                self.blocks.push(Block::Note { disp, note: "not found".into() });
+                self.blocks.push(Block::Note {
+                    disp,
+                    note: "not found".into(),
+                });
                 return;
             }
         };
         if bytes.contains(&0) {
-            self.blocks.push(Block::Note { disp, note: "binary file".into() });
+            self.blocks.push(Block::Note {
+                disp,
+                note: "binary file".into(),
+            });
             return;
         }
         let body = String::from_utf8_lossy(&bytes).into_owned();
         let nested = extract_tokens(&body);
         self.blocks.push(Block::File { disp, body });
-        let parent = resolved.parent().map(Path::to_path_buf).unwrap_or_else(|| base.to_path_buf());
+        let parent = resolved
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| base.to_path_buf());
         for tok in nested {
             self.walk(&tok, &parent, depth + 1);
         }
@@ -166,10 +178,16 @@ impl Scan {
 /// every `@path` token. Returns the rendered context text, or `None` when
 /// nothing was found.
 fn build_context(cwd: &Path) -> Option<String> {
-    let mut scan = Scan { cwd: cwd.to_path_buf(), visited: HashSet::new(), blocks: Vec::new() };
+    let mut scan = Scan {
+        cwd: cwd.to_path_buf(),
+        visited: HashSet::new(),
+        blocks: Vec::new(),
+    };
     for name in ["AGENTS.md", "CLAUDE.md"] {
         let f = cwd.join(name);
-        let Ok(bytes) = std::fs::read(&f) else { continue };
+        let Ok(bytes) = std::fs::read(&f) else {
+            continue;
+        };
         if bytes.contains(&0) {
             continue;
         }
@@ -221,7 +239,9 @@ fn lint(cwd: &Path) -> String {
     let mut found_any_file = false;
     for name in ["AGENTS.md", "CLAUDE.md"] {
         let f = cwd.join(name);
-        let Ok(bytes) = std::fs::read(&f) else { continue };
+        let Ok(bytes) = std::fs::read(&f) else {
+            continue;
+        };
         found_any_file = true;
         let content = String::from_utf8_lossy(&bytes).into_owned();
         let tokens = extract_tokens(&content);
@@ -314,7 +334,9 @@ fn main_include() -> std::io::Result<()> {
     let mut stdout = std::io::stdout();
     for line in stdin.lock().lines() {
         let line = line?;
-        let Ok(req) = serde_json::from_str::<Value>(&line) else { continue };
+        let Ok(req) = serde_json::from_str::<Value>(&line) else {
+            continue;
+        };
         let (reply, exit) = handle_include(&req);
         if let Some(reply) = reply {
             writeln!(stdout, "{reply}")?;
@@ -332,7 +354,9 @@ mod tests {
     use super::*;
 
     fn call(method: &str, params: Value) -> Value {
-        handle_include(&json!({ "id": 1, "method": method, "params": params })).0.unwrap()
+        handle_include(&json!({ "id": 1, "method": method, "params": params }))
+            .0
+            .unwrap()
     }
 
     #[test]
@@ -350,7 +374,10 @@ mod tests {
 
     #[test]
     fn tokens_dedupe_and_skip_fences() {
-        assert_eq!(extract_tokens("@a.md\n@a.md\n~~~\n@z.md\n~~~"), vec!["a.md"]);
+        assert_eq!(
+            extract_tokens("@a.md\n@a.md\n~~~\n@z.md\n~~~"),
+            vec!["a.md"]
+        );
     }
 
     fn scratch(name: &str) -> PathBuf {
